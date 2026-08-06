@@ -190,24 +190,6 @@ Precision을 제외한 주요 지표에서 통계적으로 유의한 개선이 �
 
 *Mean absolute SHAP values across the five folds.*
 
-## Temporal Holdout Evaluation
-
-시간적 편향을 보완적으로 검토하기 위해 두 그룹이 모두 존재하는 2015–2019년 자료만 사용하고, 기록 시점에 따라 7:1:2로 분할했습니다.
-
-- Total: 3,132 ECGs, stroke prevalence 35.82%
-- Train: 2,192 ECGs
-- Validation: 313 ECGs
-- Test: 627 ECGs
-
-| Model | Accuracy (%) | Recall (%) | F1-score (%) | AUC | Brier |
-|---|---:|---:|---:|---:|---:|
-| Feature-Only | 57.7 | 62.9 | 48.3 | 0.636 | 0.243 |
-| Signal-Only | 71.6 | 42.1 | 48.3 | 0.718 | 0.191 |
-| Interaction Early Fusion | 70.5 | 62.4 | 57.1 | 0.751 | 0.230 |
-| **Hybrid Fusion** | **62.5** | **83.2** | **58.3** | **0.758** | **0.199** |
-
-Hybrid Fusion은 시간적으로 분리된 테스트에서도 Signal-Only보다 AUC가 0.040 높았지만, 전체 데이터 기반 5-fold 평가보다 절대 성능이 감소했습니다. 이 평가는 표본 수와 클래스 비율이 함께 달라진 단일 시간 분할 결과이므로 외부 검증이나 미래 시점 일반화의 확정적 근거로 해석해서는 안 됩니다.
-
 ## Limitations
 
 - 단일 기관의 후향적 데이터에 기반한 연구입니다.
