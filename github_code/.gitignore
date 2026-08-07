@@ -1,0 +1,32 @@
+# Data and generated experiment outputs
+data/
+outputs/
+save/
+ckpts/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.npz
+*.npy
+*.pkl
+*.pickle
+
+# Tables and figures generated from private predictions
+*.csv
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# Python/runtime
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+.idea/
