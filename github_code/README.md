@@ -5,9 +5,9 @@ Clean GitHub-ready code for the signal-based stroke classification pipeline.
 The repository keeps only the pieces needed to run the main experiment flow:
 
 1. Signal-only model.
-2. Feature-only MLP model with architecture `128, 128, 64, 32, 1`.
+2. Feature-only MLP model.
 3. Interaction early-fusion model.
-4. Hybrid fusion using `hybrid_logit_equal`.
+4. Hybrid fusion.
 
 ## Layout
 
