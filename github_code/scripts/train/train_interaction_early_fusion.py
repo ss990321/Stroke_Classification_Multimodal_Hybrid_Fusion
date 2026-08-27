@@ -8,6 +8,7 @@ import pandas as pd
 from scipy import stats
 from typing import Optional, Dict
 from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
 
 import torch
 import torch.nn as nn
@@ -28,6 +29,9 @@ batch_size = int(os.environ.get("BATCH_SIZE", "64"))
 learning_rate = float(os.environ.get("LR", "1e-3"))
 fusion_type = "concat" # concat or mean
 MODEL_PRETRAINED = os.environ.get("MODEL_PRETRAINED", "1").lower() not in {"0", "false", "no"}
+SINGLE_SIGNAL_NPZ = os.environ.get("SINGLE_SIGNAL_NPZ")
+SINGLE_FEATURE_CSV = os.environ.get("SINGLE_FEATURE_CSV")
+SPLIT_INDEX_ROOT = os.environ.get("SPLIT_INDEX_ROOT")
 
 
 
@@ -129,6 +133,42 @@ def load_multimodal_fold_npz_with_selected_cols(data_root: str, fold_idx: int, s
     return signal, feature, y, file_name, patient_id
 
 
+_SINGLE_MIMIC_CACHE = None
+
+
+def load_single_mimic_cache():
+    global _SINGLE_MIMIC_CACHE
+    if _SINGLE_MIMIC_CACHE is None:
+        sig = np.load(SINGLE_SIGNAL_NPZ, allow_pickle=True)
+        features_df = pd.read_csv(SINGLE_FEATURE_CSV)
+        metadata = {"file_name", "PatientID", "study_id", "label", "gender", "age"}
+        feature_cols = [c for c in features_df.columns if c not in metadata]
+        _SINGLE_MIMIC_CACHE = {
+            "signal": sig["X"],
+            "y": sig["y"].astype(np.int64),
+            "file_name": sig["file_name"] if "file_name" in sig.files else None,
+            "PatientID": sig["PatientID"] if "PatientID" in sig.files else None,
+            "features_df": features_df,
+            "feature_cols": feature_cols,
+        }
+    return _SINGLE_MIMIC_CACHE
+
+
+def load_single_mimic_split(fold_idx: int, split: str, selected_cols: list):
+    data = load_single_mimic_cache()
+    idx_path = os.path.join(SPLIT_INDEX_ROOT, f"fold{fold_idx}", f"{split}_idx.npy")
+    idx = np.load(idx_path).astype(np.int64)
+    feat = (
+        data["features_df"]
+        .iloc[idx][selected_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=np.float32)
+    )
+    file_name = data["file_name"][idx] if data["file_name"] is not None else None
+    patient_id = data["PatientID"][idx] if data["PatientID"] is not None else None
+    return data["signal"][idx], feat, data["y"][idx], file_name, patient_id
+
+
 def build_dataloaders_from_saved_fold(
     data_root: str,
     fold_idx: int,
@@ -140,17 +180,30 @@ def build_dataloaders_from_saved_fold(
     scale_features: bool = True,
     generator=None,
 ):
-    train_path = os.path.join(data_root, f"fold{fold_idx}", "train.npz")
-    train_npz = np.load(train_path, allow_pickle=True)
-    saved_feature_cols = train_npz["feature_cols"]
-    _, selected_cols = select_feature_indices(saved_feature_cols, summary_csv, feature_set, p_thresh)
+    if SINGLE_SIGNAL_NPZ and SINGLE_FEATURE_CSV and SPLIT_INDEX_ROOT:
+        saved_feature_cols = load_single_mimic_cache()["feature_cols"]
+        _, selected_cols = select_feature_indices(saved_feature_cols, summary_csv, feature_set, p_thresh)
 
-    signal_tr, feat_tr, y_tr, fn_tr, pid_tr = load_multimodal_fold_npz_with_selected_cols(data_root, fold_idx, "train", selected_cols)
-    signal_va, feat_va, y_va, fn_va, pid_va = load_multimodal_fold_npz_with_selected_cols(data_root, fold_idx, "val", selected_cols)
-    signal_te, feat_te, y_te, fn_te, pid_te = load_multimodal_fold_npz_with_selected_cols(data_root, fold_idx, "test", selected_cols)
+        signal_tr, feat_tr, y_tr, fn_tr, pid_tr = load_single_mimic_split(fold_idx, "train", selected_cols)
+        signal_va, feat_va, y_va, fn_va, pid_va = load_single_mimic_split(fold_idx, "val", selected_cols)
+        signal_te, feat_te, y_te, fn_te, pid_te = load_single_mimic_split(fold_idx, "test", selected_cols)
+    else:
+        train_path = os.path.join(data_root, f"fold{fold_idx}", "train.npz")
+        train_npz = np.load(train_path, allow_pickle=True)
+        saved_feature_cols = train_npz["feature_cols"]
+
+        _, selected_cols = select_feature_indices(saved_feature_cols, summary_csv, feature_set, p_thresh)
+        signal_tr, feat_tr, y_tr, fn_tr, pid_tr = load_multimodal_fold_npz_with_selected_cols(data_root, fold_idx, "train", selected_cols)
+        signal_va, feat_va, y_va, fn_va, pid_va = load_multimodal_fold_npz_with_selected_cols(data_root, fold_idx, "val", selected_cols)
+        signal_te, feat_te, y_te, fn_te, pid_te = load_multimodal_fold_npz_with_selected_cols(data_root, fold_idx, "test", selected_cols)
 
     scaler = None
+    imputer = None
     if scale_features:
+        imputer = SimpleImputer(strategy="median")
+        feat_tr = imputer.fit_transform(feat_tr)
+        feat_va = imputer.transform(feat_va)
+        feat_te = imputer.transform(feat_te)
         scaler = StandardScaler()
         feat_tr = scaler.fit_transform(feat_tr)
         feat_va = scaler.transform(feat_va)
@@ -178,6 +231,7 @@ def build_dataloaders_from_saved_fold(
         "train_patient_id": np.asarray(pid_tr).astype(str) if pid_tr is not None else np.array([]),
         "val_patient_id": np.asarray(pid_va).astype(str) if pid_va is not None else np.array([]),
         "test_patient_id": np.asarray(pid_te).astype(str) if pid_te is not None else np.array([]),
+        "imputer_used": imputer is not None,
     }
     return dl_tr, dl_va, dl_te, meta, scaler
 

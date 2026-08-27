@@ -43,6 +43,8 @@ SAVE_ROOT = os.environ.get(
     "SAVE_ROOT",
     str(PROJECT_ROOT / "outputs" / "signal_only" / "efficientnet_b0"),
 )
+SINGLE_SIGNAL_NPZ = os.environ.get("SINGLE_SIGNAL_NPZ")
+SPLIT_INDEX_ROOT = os.environ.get("SPLIT_INDEX_ROOT")
 
 os.makedirs(SAVE_ROOT, exist_ok=True)
 
@@ -64,7 +66,33 @@ class SignalDataset(Dataset):
         return x, y
 
 
+_SINGLE_SIGNAL_CACHE = None
+
+
+def load_single_signal_npz():
+    global _SINGLE_SIGNAL_CACHE
+    if _SINGLE_SIGNAL_CACHE is None:
+        data = np.load(SINGLE_SIGNAL_NPZ, allow_pickle=True)
+        _SINGLE_SIGNAL_CACHE = {
+            "X": data["X"],
+            "y": data["y"],
+            "file_name": data["file_name"] if "file_name" in data.files else None,
+            "PatientID": data["PatientID"] if "PatientID" in data.files else None,
+        }
+    return _SINGLE_SIGNAL_CACHE
+
+
 def load_fold_npz(signal_fold_root, fold_idx, split):
+    if SINGLE_SIGNAL_NPZ and SPLIT_INDEX_ROOT:
+        data = load_single_signal_npz()
+        idx_path = os.path.join(SPLIT_INDEX_ROOT, f"fold{fold_idx}", f"{split}_idx.npy")
+        idx = np.load(idx_path).astype(np.int64)
+        X = data["X"][idx]
+        y = data["y"][idx]
+        file_name = data["file_name"][idx] if data["file_name"] is not None else None
+        patient_id = data["PatientID"][idx] if data["PatientID"] is not None else None
+        return X, y, file_name, patient_id
+
     path = os.path.join(signal_fold_root, f"fold{fold_idx}", f"{split}.npz")
     data = np.load(path, allow_pickle=True)
 
