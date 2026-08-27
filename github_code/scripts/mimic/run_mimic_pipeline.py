@@ -33,7 +33,13 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         choices=["basic_early", "full_hybrid"],
         default="basic_early",
-        help="basic_early trains only the two-branch early-fusion model. full_hybrid runs signal, feature, interaction early, then hybrid fusion.",
+        help="basic_early trains only the two-branch early-fusion model. full_hybrid runs signal, feature, early fusion, then hybrid fusion.",
+    )
+    parser.add_argument(
+        "--early_model",
+        choices=["basic", "interaction"],
+        default="basic",
+        help="Early-fusion model that full_hybrid feeds into hybrid late fusion.",
     )
     parser.add_argument("--overwrite_folds", action="store_true")
     parser.add_argument("--skip_prepare", action="store_true")
@@ -94,6 +100,36 @@ def prepare_folds(args: argparse.Namespace, env: dict[str, str]) -> None:
     run_command(cmd, env)
 
 
+def basic_early_cmd(args: argparse.Namespace, out_dir: Path, multimodal_data_root: Path) -> list:
+    return [
+        sys.executable,
+        "scripts/train/train_basic_early_fusion.py",
+        "--data_root",
+        multimodal_data_root,
+        "--out_dir",
+        out_dir,
+        "--epochs",
+        str(args.epochs),
+        "--batch_size",
+        str(args.batch_size),
+        "--num_workers",
+        "0",
+        "--num_folds",
+        str(args.num_folds),
+        "--feature_set",
+        "all",
+    ]
+
+
+def single_source_env(args: argparse.Namespace, split_index_root: Path) -> dict[str, str]:
+    """Env vars that let a trainer read the prepared npz/csv directly via split indices."""
+    return {
+        "SINGLE_SIGNAL_NPZ": str(args.prepared_dir / "mimic_external_signal.npz"),
+        "SINGLE_FEATURE_CSV": str(args.prepared_dir / "mimic_external_features.csv"),
+        "SPLIT_INDEX_ROOT": str(split_index_root),
+    }
+
+
 def main() -> None:
     args = parse_args()
     args.prepared_dir = args.prepared_dir.resolve()
@@ -114,36 +150,11 @@ def main() -> None:
         return
 
     if args.mode == "basic_early":
-        split_index_root = args.data_root / "split_indices"
         basic_env = env.copy()
         if not args.materialize_npz_folds:
-            basic_env.update(
-                {
-                    "SINGLE_SIGNAL_NPZ": str(args.prepared_dir / "mimic_external_signal.npz"),
-                    "SINGLE_FEATURE_CSV": str(args.prepared_dir / "mimic_external_features.csv"),
-                    "SPLIT_INDEX_ROOT": str(split_index_root),
-                }
-            )
+            basic_env.update(single_source_env(args, split_index_root))
         out_dir = args.output_root / "basic_early_fusion"
-        run_command(
-            [
-                sys.executable,
-                "scripts/train/train_basic_early_fusion.py",
-                "--data_root",
-                multimodal_data_root,
-                "--out_dir",
-                out_dir,
-                "--epochs",
-                str(args.epochs),
-                "--batch_size",
-                str(args.batch_size),
-                "--num_workers",
-                "0",
-                "--num_folds",
-                str(args.num_folds),
-            ],
-            basic_env,
-        )
+        run_command(basic_early_cmd(args, out_dir, multimodal_data_root), basic_env)
         print("\nMIMIC basic early-fusion pipeline completed.")
         print("Output root:", out_dir)
         print("Summary:", out_dir / "basic_early_fusion_summary.csv")
@@ -160,12 +171,7 @@ def main() -> None:
         }
     )
     if not args.materialize_npz_folds:
-        signal_env.update(
-            {
-                "SINGLE_SIGNAL_NPZ": str(args.prepared_dir / "mimic_external_signal.npz"),
-                "SPLIT_INDEX_ROOT": str(split_index_root),
-            }
-        )
+        signal_env.update(single_source_env(args, split_index_root))
     run_command([sys.executable, "scripts/train/train_signal_only.py"], signal_env)
 
     feature_fusion_root = args.output_root / "feature_only" / "late_fusion_ready"
@@ -187,24 +193,23 @@ def main() -> None:
         )
         run_command([sys.executable, "scripts/train/train_feature_only.py"], feature_env)
 
-    interaction_out = args.output_root / "interaction_early_fusion"
-    interaction_env = env.copy()
+    early_env = env.copy()
     if not args.materialize_npz_folds:
-        interaction_env.update(
-            {
-                "SINGLE_SIGNAL_NPZ": str(args.prepared_dir / "mimic_external_signal.npz"),
-                "SINGLE_FEATURE_CSV": str(args.prepared_dir / "mimic_external_features.csv"),
-                "SPLIT_INDEX_ROOT": str(split_index_root),
-            }
-        )
-    run_command(
-        [
+        early_env.update(single_source_env(args, split_index_root))
+
+    if args.early_model == "basic":
+        early_out = args.output_root / "basic_early_fusion"
+        early_cmd = basic_early_cmd(args, early_out, multimodal_data_root)
+        early_root = early_out / "late_fusion_ready" / "all"
+    else:
+        early_out = args.output_root / "interaction_early_fusion"
+        early_cmd = [
             sys.executable,
             "scripts/train/train_interaction_early_fusion.py",
             "--data_root",
             multimodal_data_root,
             "--out_dir",
-            interaction_out,
+            early_out,
             "--summary_csv",
             summary_csv,
             "--epochs",
@@ -217,9 +222,10 @@ def main() -> None:
             "all",
             "--raw_feat_ch",
             "41",
-        ],
-        interaction_env,
-    )
+        ]
+        # The interaction trainer appends its fusion_type ("concat") to out_dir.
+        early_root = early_out / "concat" / "late_fusion_ready" / "all"
+    run_command(early_cmd, early_env)
 
     hybrid_out = args.output_root / "hybrid_fusion"
     hybrid_env = env.copy()
@@ -229,7 +235,7 @@ def main() -> None:
             "SIGNAL_MODE": "lossbest",
             "SIGNAL_ROOT": str(signal_out),
             "FEATURE_ROOT": str(feature_fusion_root),
-            "EARLY_ROOT": str(interaction_out / "concat" / "late_fusion_ready" / "all"),
+            "EARLY_ROOT": str(early_root),
             "OUT_ROOT": str(hybrid_out),
         }
     )

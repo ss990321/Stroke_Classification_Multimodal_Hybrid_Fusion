@@ -281,6 +281,7 @@ def main():
     parser.add_argument("--min_delta", type=float, default=0.0)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--num_folds", type=int, default=int(os.environ.get("NUM_FOLDS", "5")))
+    parser.add_argument("--feature_set", default="all", help="Name of the late-fusion pack subdirectory.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--ecg_embedding_dim", type=int, default=512)
@@ -344,6 +345,22 @@ def main():
             }
         ).to_csv(fold_dir / "preds_test_lossbest.csv", index=False)
         pd.DataFrame(train_info["history"]).to_csv(fold_dir / "history.csv", index=False)
+
+        late_dir = Path(args.out_dir) / "late_fusion_ready" / args.feature_set / f"fold{fold_idx}"
+        late_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            late_dir / "late_fusion_pack.npz",
+            val_probs=np.asarray(p_val, dtype=np.float32),
+            val_logits=np.asarray(safe_logit(p_val), dtype=np.float32),
+            val_y=np.asarray(y_val, dtype=np.int64),
+            val_file_name=np.asarray(meta["val_file_name"]).astype(str),
+            val_patient_id=np.asarray(meta["val_patient_id"]).astype(str),
+            test_probs=np.asarray(p_test, dtype=np.float32),
+            test_logits=np.asarray(safe_logit(p_test), dtype=np.float32),
+            test_y=np.asarray(y_test, dtype=np.int64),
+            test_file_name=np.asarray(meta["test_file_name"]).astype(str),
+            test_patient_id=np.asarray(meta["test_patient_id"]).astype(str),
+        )
         print(f"[OK] Fold {fold_idx} AUC={metrics['auc']:.4f}, F1={metrics['f1']:.4f}, threshold={thr_youden:.4f}")
 
     fold_df = pd.DataFrame(results)

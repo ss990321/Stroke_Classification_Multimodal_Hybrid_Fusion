@@ -1,6 +1,10 @@
 from .basic_early_fusion import BasicEarlyFusion
-from .interaction_early_fusion import InteractionEarlyFusion
 
-__all__ = ["BasicEarlyFusion", "InteractionEarlyFusion"]
+try:
+    from .interaction_early_fusion import InteractionEarlyFusion
+except ImportError:
+    InteractionEarlyFusion = None
 
-__all__ = ["InteractionEarlyFusion"]
+    __all__ = ["BasicEarlyFusion"]
+else:
+    __all__ = ["BasicEarlyFusion", "InteractionEarlyFusion"]
