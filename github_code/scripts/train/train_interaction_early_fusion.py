@@ -119,10 +119,21 @@ def select_feature_indices(saved_feature_cols, summary_csv: str, feature_set: st
     return selected_idx, selected_cols
 
 
+def sanitize_signal(X, tag=""):
+    """Prepared MIMIC waveforms carry sparse NaN gaps; leaving them in makes every
+    loss and prediction NaN. Fill them with the 0 mV baseline."""
+    n_bad = int(np.isnan(X).sum() + np.isinf(X).sum())
+    if n_bad:
+        n_rec = int((~np.isfinite(X)).any(axis=tuple(range(1, X.ndim))).sum())
+        print(f"[sanitize] {tag}: filled {n_bad} non-finite samples across {n_rec} records")
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    return X
+
+
 def load_multimodal_fold_npz_with_selected_cols(data_root: str, fold_idx: int, split: str, selected_cols: list):
     path = os.path.join(data_root, f"fold{fold_idx}", f"{split}.npz")
     data = np.load(path, allow_pickle=True)
-    signal = data["signal"]
+    signal = sanitize_signal(data["signal"], f"fold{fold_idx}/{split}")
     feature = data["feature"]
     y = data["y"]
     file_name = data["file_name"] if "file_name" in data.files else None
@@ -166,7 +177,8 @@ def load_single_mimic_split(fold_idx: int, split: str, selected_cols: list):
     )
     file_name = data["file_name"][idx] if data["file_name"] is not None else None
     patient_id = data["PatientID"][idx] if data["PatientID"] is not None else None
-    return data["signal"][idx], feat, data["y"][idx], file_name, patient_id
+    signal = sanitize_signal(data["signal"][idx], f"fold{fold_idx}/{split}")
+    return signal, feat, data["y"][idx], file_name, patient_id
 
 
 def build_dataloaders_from_saved_fold(

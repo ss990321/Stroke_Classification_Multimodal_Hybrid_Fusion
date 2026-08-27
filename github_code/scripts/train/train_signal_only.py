@@ -82,12 +82,23 @@ def load_single_signal_npz():
     return _SINGLE_SIGNAL_CACHE
 
 
+def sanitize_signal(X, tag=""):
+    """Prepared MIMIC waveforms carry sparse NaN gaps; leaving them in makes every
+    loss and prediction NaN. Fill them with the 0 mV baseline."""
+    n_bad = int(np.isnan(X).sum() + np.isinf(X).sum())
+    if n_bad:
+        n_rec = int((~np.isfinite(X)).any(axis=tuple(range(1, X.ndim))).sum())
+        print(f"[sanitize] {tag}: filled {n_bad} non-finite samples across {n_rec} records")
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    return X
+
+
 def load_fold_npz(signal_fold_root, fold_idx, split):
     if SINGLE_SIGNAL_NPZ and SPLIT_INDEX_ROOT:
         data = load_single_signal_npz()
         idx_path = os.path.join(SPLIT_INDEX_ROOT, f"fold{fold_idx}", f"{split}_idx.npy")
         idx = np.load(idx_path).astype(np.int64)
-        X = data["X"][idx]
+        X = sanitize_signal(data["X"][idx], f"fold{fold_idx}/{split}")
         y = data["y"][idx]
         file_name = data["file_name"][idx] if data["file_name"] is not None else None
         patient_id = data["PatientID"][idx] if data["PatientID"] is not None else None
@@ -96,7 +107,7 @@ def load_fold_npz(signal_fold_root, fold_idx, split):
     path = os.path.join(signal_fold_root, f"fold{fold_idx}", f"{split}.npz")
     data = np.load(path, allow_pickle=True)
 
-    X = data["X"]
+    X = sanitize_signal(data["X"], f"fold{fold_idx}/{split}")
     y = data["y"]
 
     file_name = data["file_name"] if "file_name" in data.files else None

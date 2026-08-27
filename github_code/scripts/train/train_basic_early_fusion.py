@@ -133,6 +133,17 @@ def predict(model, loader, device):
     return np.concatenate(ys).astype(np.int64), np.concatenate(probs).astype(np.float64)
 
 
+def sanitize_signal(X, tag=""):
+    """Prepared MIMIC waveforms carry sparse NaN gaps; leaving them in makes every
+    loss and prediction NaN. Fill them with the 0 mV baseline."""
+    n_bad = int(np.isnan(X).sum() + np.isinf(X).sum())
+    if n_bad:
+        n_rec = int((~np.isfinite(X)).any(axis=tuple(range(1, X.ndim))).sum())
+        print(f"[sanitize] {tag}: filled {n_bad} non-finite samples across {n_rec} records")
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    return X
+
+
 _SINGLE_CACHE = None
 
 
@@ -169,11 +180,12 @@ def load_split(data_root: str, fold_idx: int, split: str):
         )
         file_name = data["file_name"][idx] if data["file_name"] is not None else np.array([])
         patient_id = data["PatientID"][idx] if data["PatientID"] is not None else np.array([])
-        return data["signal"][idx], feature, data["y"][idx], file_name.astype(str), patient_id.astype(str), data["feature_cols"]
+        signal = sanitize_signal(data["signal"][idx], f"fold{fold_idx}/{split}")
+        return signal, feature, data["y"][idx], file_name.astype(str), patient_id.astype(str), data["feature_cols"]
 
     z = np.load(os.path.join(data_root, f"fold{fold_idx}", f"{split}.npz"), allow_pickle=True)
     return (
-        z["signal"],
+        sanitize_signal(z["signal"], f"fold{fold_idx}/{split}"),
         z["feature"],
         z["y"].astype(np.int64),
         z["file_name"].astype(str) if "file_name" in z.files else np.array([]),
