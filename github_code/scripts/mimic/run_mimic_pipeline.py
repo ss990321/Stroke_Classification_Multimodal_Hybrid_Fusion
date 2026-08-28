@@ -9,6 +9,10 @@ from pathlib import Path
 import subprocess
 import sys
 
+import numpy as np
+import pandas as pd
+from scipy import stats
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PREPARED_DIR = Path(r"C:\Users\ISY\Downloads\mimic_ecg_external_prepared")
@@ -98,6 +102,54 @@ def prepare_folds(args: argparse.Namespace, env: dict[str, str]) -> None:
     if not args.materialize_npz_folds:
         cmd.append("--index_only")
     run_command(cmd, env)
+
+
+# Column in feature_only_results.csv -> metric name used by the other stage summaries.
+FEATURE_ONLY_METRICS = {
+    "auc": "test_auc",
+    "accuracy": "youden_accuracy_test",
+    "precision": "youden_precision_test",
+    "recall": "youden_recall_test",
+    "f1": "youden_f1_test",
+    "fpr": "youden_fpr_test",
+}
+
+
+def mean_ci(values) -> tuple:
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return float("nan"), float("nan")
+    mean = float(np.mean(values))
+    if len(values) < 2:
+        return mean, float("nan")
+    err = stats.sem(values)
+    if not np.isfinite(err) or err == 0:
+        return mean, 0.0
+    ci_low, _ = stats.t.interval(0.95, len(values) - 1, loc=mean, scale=err)
+    return mean, float(mean - ci_low)
+
+
+def summarize_feature_only(output_root: Path, num_folds: int) -> Path:
+    """train_feature_only.py runs once per fold and writes only its own CSV, so
+    nothing aggregates it the way the other stages aggregate themselves."""
+    feature_root = output_root / "feature_only"
+    rows = []
+    for fold_idx in range(num_folds):
+        path = feature_root / f"fold{fold_idx}" / "feature_only_results.csv"
+        frame = pd.read_csv(path)
+        frame.insert(0, "fold", fold_idx)
+        rows.append(frame)
+
+    foldwise = pd.concat(rows, ignore_index=True)
+    foldwise.to_csv(feature_root / "feature_only_foldwise.csv", index=False)
+
+    summary = {"model": "feature_only", "folds": int(num_folds)}
+    for metric, column in FEATURE_ONLY_METRICS.items():
+        summary[f"{metric}_mean"], summary[f"{metric}_ci95_margin"] = mean_ci(foldwise[column].values)
+    summary_path = feature_root / "feature_only_summary.csv"
+    pd.DataFrame([summary]).to_csv(summary_path, index=False)
+    return summary_path
 
 
 def basic_early_cmd(args: argparse.Namespace, out_dir: Path, multimodal_data_root: Path) -> list:
@@ -193,6 +245,9 @@ def main() -> None:
         )
         run_command([sys.executable, "scripts/train/train_feature_only.py"], feature_env)
 
+    feature_summary = summarize_feature_only(args.output_root, args.num_folds)
+    print("\nFeature-only summary:", feature_summary)
+
     early_env = env.copy()
     if not args.materialize_npz_folds:
         early_env.update(single_source_env(args, split_index_root))
@@ -243,6 +298,7 @@ def main() -> None:
 
     print("\nMIMIC pipeline completed.")
     print("Output root:", args.output_root)
+    print("Feature-only summary:", feature_summary)
     print("Hybrid summary:", hybrid_out / "all" / "lossbest" / "hybrid_logit_equal_summary.csv")
 
 
